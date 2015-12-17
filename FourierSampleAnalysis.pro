@@ -8,7 +8,7 @@ QT       += core gui
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
-TARGET = FourierSampleAnalysis
+TARGET = FourierSampleAnalysis_temp
 TEMPLATE = app
 
 OBJECTS_DIR = obj
@@ -20,6 +20,6 @@ SOURCES += src/*.cpp \
     src/FourierSolver.cpp
 
 HEADERS  += include/*.h \
-    include/FourierSolver.h
+    include/FourierSolver.h \
+    include/float2.h
 
-FORMS    += mainwindow.ui

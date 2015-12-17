@@ -40,7 +40,11 @@ MainWindow::~MainWindow()
 //----------------------------------------------------------------------------------------------------------------------
 void MainWindow::import2DData()
 {
-    m_fourierSolver->import2DFromFile(QFileDialog::getOpenFileName(this,"Import 2D Points from File"));
+    QString dir = QFileDialog::getOpenFileName(this,"Import 2D Points from File");
+    if(!dir.isEmpty())
+    {
+        m_fourierSolver->import2DFromFile(dir);
+    }
 }
 //----------------------------------------------------------------------------------------------------------------------
 void MainWindow::analyse()
