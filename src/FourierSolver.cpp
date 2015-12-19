@@ -6,10 +6,10 @@
 #include <QColor>
 
 //----------------------------------------------------------------------------------------------------------------------
-FourierSolver::FourierSolver() : m_width(100),m_height(100),m_rangeSelection(0.05),m_axisRange(0.2)
+FourierSolver::FourierSolver() : m_width(100),m_height(100),m_rangeSelection(0.05f),m_axisRange(0.2f)
 {
     m_2DPoints.clear();
-    setStandardDeviation(0.05);
+    setStandardDeviation(0.0025f);
     m_psImage = QImage(m_width,m_height,QImage::Format_RGB32);
     m_pdf = new float*[m_width];
     for(int i=0;i<m_width;i++)
@@ -106,6 +106,59 @@ void FourierSolver::import2DFromFile(QString _dir)
 //----------------------------------------------------------------------------------------------------------------------
 void FourierSolver::analysePoints()
 {
+
+#ifdef USE_PTHREADS
+    std::vector<pthread_t> pid;
+    int size = m_psImage.width()*m_psImage.height();
+    pid.resize(size);
+    std::vector<PSAArgs> a;
+    a.resize(size);
+    int rc;
+    for(int x=0;x<m_psImage.width();x++)
+    for(int y=0;y<m_psImage.height();y++)
+    {
+
+        int idx = x*m_psImage.width()+y;
+        a[idx].obj = this;
+        a[idx].x = x;
+        a[idx].y = y;
+
+        rc = pthread_create(&pid[idx],NULL,psaWrapper,(void*)&a[idx]);
+        if (rc)
+        {
+            std::cout << "Error:unable to create thread," << rc << std::endl;
+        }
+    }
+
+    void *status;
+    //Wait for all the treads to finish
+    for(int i=0;i<size;i++)
+    {
+          rc = pthread_join(pid[i], &status);
+          if (rc){
+             std::cout << "Error:unable to join," << rc << std::endl;
+          }
+    }
+
+    std::cout<<"Threads complete!"<<std::endl;
+
+    // Can parallise these next bits later
+    float max = 0;
+    for(int x=0;x<m_psImage.width();x++)
+    for(int y=0;y<m_psImage.height();y++)
+    {
+        if(m_ps[x][y]>max) max = m_ps[x][y];
+    }
+    float ps;
+    for(int x=0;x<m_psImage.width();x++)
+    for(int y=0;y<m_psImage.height();y++)
+    {
+        ps = m_ps[x][y]/max;
+        ps*=255;
+        m_psImage.setPixel(x,y,QColor(ps,ps,ps).rgb());
+    }
+
+#else
     float ps;
     float2 freqVector;
     float max = 0;
@@ -114,7 +167,7 @@ void FourierSolver::analysePoints()
     {
         freqVector = float2((float)(x-m_psImage.width()*.5f)/m_psImage.width(),(float)(y-m_psImage.height()*.5f)/m_psImage.height());
         freqVector *= m_axisRange;
-        ps = m_pdf[(int)floor(x)][(int)floor(y)];//0.f;
+        ps = 0.f;
         for(unsigned int i=0;i<m_sampleDiff.size();i++)
         {
             ps+= gausian(freqVector,m_sampleDiff[i])*pdf(m_sampleDiff[i]);
@@ -135,8 +188,31 @@ void FourierSolver::analysePoints()
         ps*=255;
         m_psImage.setPixel(x,y,QColor(ps,ps,ps).rgb());
     }
+#endif
+
 
 }
+//----------------------------------------------------------------------------------------------------------------------
+#ifdef USE_PTHREADS
+void FourierSolver::perSampleAnalysis(int _x, int _y)
+{
+    float ps;
+    float2 freqVector;
+    freqVector = float2((float)(_x-m_psImage.width()*.5f)/m_psImage.width(),(float)(_y-m_psImage.height()*.5f)/m_psImage.height());
+    freqVector *= m_axisRange;
+    ps = 0.f;
+    for(unsigned int i=0;i<m_sampleDiff.size();i++)
+    {
+        ps+= gausian(freqVector,m_sampleDiff[i])*pdf(m_sampleDiff[i]);
+    }
+    ps*=m_sampleDiff.size();
+
+    //ps = m_pdf[x][y]*m_sampleDiff.size();
+    std::cout<<"ps" <<ps<<std::endl;
+    //if(ps>255)ps=255;
+    m_ps[_x][_y] = ps;
+}
+#endif
 //----------------------------------------------------------------------------------------------------------------------
 float FourierSolver::gausian(float2 _q, float2 _d)
 {

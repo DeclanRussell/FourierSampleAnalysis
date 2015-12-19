@@ -23,3 +23,14 @@ HEADERS  += include/*.h \
     include/FourierSolver.h \
     include/float2.h
 
+#DEFINES+= USE_PTHREADS
+
+contains(DEFINES,USE_PTHREADS)
+{
+    # This is the windows version of pthreads. Should be nice and easy to install on any other operating system that isnt windows
+    win32:LIBS+= -lpthreadVC2
+    unix:LIBS+= -lpthread
+    # This flag is needed to be added such that pthreads works
+    QMAKE_CXXFLAGS+=-DHAVE_STRUCT_TIMESPEC
+    message("Building project with pthreads")
+}
