@@ -1,15 +1,16 @@
 #include "FourierSolver.h"
 #include <fstream>
 #define _USE_MATH_DEFINES
+#define MAX_THREADS 1000
 #include <math.h>
 #include <iostream>
 #include <QColor>
 
 //----------------------------------------------------------------------------------------------------------------------
-FourierSolver::FourierSolver() : m_width(100),m_height(100),m_rangeSelection(0.05f),m_axisRange(0.2f)
+FourierSolver::FourierSolver() : m_width(200),m_height(200),m_rangeSelection(2.f),m_axisRange(5.f)
 {
     m_2DPoints.clear();
-    setStandardDeviation(0.0025f);
+    setStandardDeviation(0.2f);
     m_psImage = QImage(m_width,m_height,QImage::Format_RGB32);
     m_pdf = new float*[m_width];
     for(int i=0;i<m_width;i++)
@@ -64,23 +65,6 @@ void FourierSolver::import2DFromFile(QString _dir)
     {
         std::cerr<<"Could not open file :("<<std::endl;
     }
-    // first find our min and max values
-    float2 min,max;
-    min = max = m_2DPoints[0];
-    for(unsigned int i=0; i<m_2DPoints.size();i++)
-    {
-        if(m_2DPoints[i].x<min.x) min.x = m_2DPoints[i].x;
-        if(m_2DPoints[i].y<min.y) min.y = m_2DPoints[i].y;
-        if(m_2DPoints[i].x>max.x) max.x = m_2DPoints[i].x;
-        if(m_2DPoints[i].y>max.y) max.y = m_2DPoints[i].y;
-    }
-    // Move our points between 0-1
-    max-=min;
-    for(unsigned int i=0; i<m_2DPoints.size();i++)
-    {
-        m_2DPoints[i]-=min;
-        m_2DPoints[i]/=max;
-    }
     // Calculate our pair-wise differencials. This is a generalisation of the fourier transform to improve performance.
     // We will also create our probability density histogram here
     float l;
@@ -109,35 +93,43 @@ void FourierSolver::analysePoints()
 
 #ifdef USE_PTHREADS
     std::vector<pthread_t> pid;
-    int size = m_psImage.width()*m_psImage.height();
-    pid.resize(size);
+    int cellLeftToCompute = m_psImage.width()*m_psImage.height();
+    int blocks = ceil(cellLeftToCompute/MAX_THREADS);
+    pid.resize(MAX_THREADS);
     std::vector<PSAArgs> a;
-    a.resize(size);
+    a.resize(MAX_THREADS);
     int rc;
-    for(int x=0;x<m_psImage.width();x++)
-    for(int y=0;y<m_psImage.height();y++)
+    int numThreads = MAX_THREADS;
+    for(int i=0;i<blocks;i++)
     {
-
-        int idx = x*m_psImage.width()+y;
-        a[idx].obj = this;
-        a[idx].x = x;
-        a[idx].y = y;
-
-        rc = pthread_create(&pid[idx],NULL,psaWrapper,(void*)&a[idx]);
-        if (rc)
+        if(cellLeftToCompute<numThreads) numThreads = cellLeftToCompute;
+        for(int j=0;j<numThreads;j++)
         {
-            std::cout << "Error:unable to create thread," << rc << std::endl;
-        }
-    }
 
-    void *status;
-    //Wait for all the treads to finish
-    for(int i=0;i<size;i++)
-    {
-          rc = pthread_join(pid[i], &status);
-          if (rc){
-             std::cout << "Error:unable to join," << rc << std::endl;
-          }
+            int idx = i*MAX_THREADS+j;
+            a[j].obj = this;
+            a[j].x = floor(idx/m_psImage.width());
+            a[j].y = idx-(a[j].x*m_psImage.width());
+
+            rc = pthread_create(&pid[j],NULL,psaWrapper,(void*)&a[j]);
+            if (rc)
+            {
+                std::cout<<" failed on thread "<<idx<<std::endl;
+                exit(-1);
+                std::cout << "Error:unable to create thread," << rc << std::endl;
+            }
+        }
+
+        void *status;
+        //Wait for all the treads to finish
+        for(int k=0;k<numThreads;k++)
+        {
+              rc = pthread_join(pid[k], &status);
+              if (rc){
+                 std::cout << "Error:unable to join," << rc << std::endl;
+              }
+        }
+        std::cout<<((float)i/(float)(blocks-1))*100.f<<"% Complete!"<<std::endl;
     }
 
     std::cout<<"Threads complete!"<<std::endl;
@@ -196,6 +188,7 @@ void FourierSolver::analysePoints()
 #ifdef USE_PTHREADS
 void FourierSolver::perSampleAnalysis(int _x, int _y)
 {
+    //std::cout<<"x "<<_x<<" y "<<_y<<std::endl;
     float ps;
     float2 freqVector;
     freqVector = float2((float)(_x-m_psImage.width()*.5f)/m_psImage.width(),(float)(_y-m_psImage.height()*.5f)/m_psImage.height());
@@ -208,7 +201,7 @@ void FourierSolver::perSampleAnalysis(int _x, int _y)
     ps*=m_sampleDiff.size();
 
     //ps = m_pdf[x][y]*m_sampleDiff.size();
-    std::cout<<"ps" <<ps<<std::endl;
+    //std::cout<<"ps" <<ps<<std::endl;
     //if(ps>255)ps=255;
     m_ps[_x][_y] = ps;
 }

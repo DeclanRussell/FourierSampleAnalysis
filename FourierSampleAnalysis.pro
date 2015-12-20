@@ -23,7 +23,7 @@ HEADERS  += include/*.h \
     include/FourierSolver.h \
     include/float2.h
 
-#DEFINES+= USE_PTHREADS
+DEFINES+= USE_PTHREADS
 
 contains(DEFINES,USE_PTHREADS)
 {
