@@ -4,6 +4,8 @@
 #include <QPushButton>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QDoubleSpinBox>
+#include <QLabel>
 #include <QPixmap>
 #include <iostream>
 
@@ -12,28 +14,57 @@ MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent)
 {
     setWindowTitle("Fourier Analysis");
-    resize(500,500);
+    resize(800,900);
     m_centralWgt = new QGroupBox(this);
     this->setCentralWidget(m_centralWgt);
     m_UI = new QGridLayout(m_centralWgt);
     m_centralWgt->setLayout(m_UI);
     m_fourierSolver = new FourierSolver;
     m_psLbl = new QLabel(m_centralWgt);
-    m_UI->addWidget(m_psLbl,0,0,1,1);
+    m_UI->addWidget(m_psLbl,0,0,1,2);
 
-    // Create a button to import our data
+    // Create a field for our axis range
+    m_UI->addWidget(new QLabel("Axis Range",m_centralWgt),1,0,1,1);
+    QDoubleSpinBox *axisRangeSpn = new QDoubleSpinBox(m_centralWgt);
+    axisRangeSpn->setValue(m_fourierSolver->getAxisRange());
+    axisRangeSpn->setDecimals(4);
+    connect(axisRangeSpn,SIGNAL(valueChanged(double)),this,SLOT(setAxisRange(double)));
+    m_UI->addWidget(axisRangeSpn,1,1,1,1);
+
+    // Create a field for our range selection
+    m_UI->addWidget(new QLabel("Range Selection",m_centralWgt),2,0,1,1);
+    QDoubleSpinBox *rangeselSpn = new QDoubleSpinBox(m_centralWgt);
+    rangeselSpn->setValue(m_fourierSolver->getRangeSelection());
+    rangeselSpn->setDecimals(4);
+    connect(rangeselSpn,SIGNAL(valueChanged(double)),this,SLOT(setRangeSelection(double)));
+    m_UI->addWidget(rangeselSpn,2,1,1,1);
+
+    // Create a field for our gaussian standar deviation
+    m_UI->addWidget(new QLabel("Gaussian Standard Deviation",m_centralWgt),3,0,1,1);
+    QDoubleSpinBox *sdSpn = new QDoubleSpinBox(m_centralWgt);
+    sdSpn->setValue(m_fourierSolver->getStandardDeviation());
+    sdSpn->setDecimals(4);
+    connect(sdSpn,SIGNAL(valueChanged(double)),this,SLOT(setSD(double)));
+    m_UI->addWidget(sdSpn,3,1,1,1);
+
+    // Create a button to import 2D points from a file
     QPushButton *imp2D = new QPushButton("Import 2D Points from File",m_centralWgt);
-    m_UI->addWidget(imp2D,1,0,1,1);
+    m_UI->addWidget(imp2D,4,0,1,2);
     connect(imp2D,SIGNAL(pressed()),this,SLOT(import2DData()));
+
+    // Create a button to import our differentials from a file
+    QPushButton *impdiff = new QPushButton("Import differentials from File",m_centralWgt);
+    m_UI->addWidget(impdiff,5,0,1,2);
+    connect(impdiff,SIGNAL(pressed()),this,SLOT(importDiffData()));
 
     // Create a button to analys our data
     QPushButton *anylBtn = new QPushButton("Analyse Data",m_centralWgt);
-    m_UI->addWidget(anylBtn,2,0,1,1);
+    m_UI->addWidget(anylBtn,6,0,1,2);
     connect(anylBtn,SIGNAL(pressed()),this,SLOT(analyse()));
 
     // Create a save button
     QPushButton *saveBtn = new QPushButton("Save Image",m_centralWgt);
-    m_UI->addWidget(saveBtn,3,0,1,1);
+    m_UI->addWidget(saveBtn,7,0,1,2);
     connect(saveBtn,SIGNAL(pressed()),this,SLOT(saveImage()));
 
 
@@ -50,6 +81,15 @@ void MainWindow::import2DData()
     if(!dir.isEmpty())
     {
         m_fourierSolver->import2DFromFile(dir);
+    }
+}
+//----------------------------------------------------------------------------------------------------------------------
+void MainWindow::importDiffData()
+{
+    QString dir = QFileDialog::getOpenFileName(this,"Import Differentials from File");
+    if(!dir.isEmpty())
+    {
+        m_fourierSolver->importDifferentialsFromFile(dir);
     }
 }
 //----------------------------------------------------------------------------------------------------------------------

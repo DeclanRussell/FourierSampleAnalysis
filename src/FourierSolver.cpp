@@ -9,7 +9,6 @@
 //----------------------------------------------------------------------------------------------------------------------
 FourierSolver::FourierSolver() : m_width(200),m_height(200),m_rangeSelection(2.f),m_axisRange(5.f)
 {
-    m_2DPoints.clear();
     setStandardDeviation(0.2f);
     m_psImage = QImage(m_width,m_height,QImage::Format_RGB32);
     m_pdf = new float*[m_width];
@@ -48,6 +47,7 @@ void FourierSolver::import2DFromFile(QString _dir)
 {
     // Delete any data we may have already imported
     m_2DPoints.clear();
+    m_differentials.clear();
     // Read our 2D points from our file into our array
     std::ifstream file(_dir.toStdString());
     float2 p;
@@ -67,12 +67,47 @@ void FourierSolver::import2DFromFile(QString _dir)
     }
     // Calculate our pair-wise differencials. This is a generalisation of the fourier transform to improve performance.
     // We will also create our probability density histogram here
-    float l;
     for(unsigned int i=0; i<m_2DPoints.size();i++)
     for(unsigned int j=0;j<m_2DPoints.size();j++)
     {
         if(i==j) continue;
         p = m_2DPoints[i]-m_2DPoints[j];
+        m_differentials.push_back(p);
+    }
+}
+//----------------------------------------------------------------------------------------------------------------------
+void FourierSolver::importDifferentialsFromFile(QString _dir)
+{
+    m_differentials.clear();
+    // Read our 2D points from our file into our array
+    std::ifstream file(_dir.toStdString());
+    float2 p;
+    if(file.is_open())
+    {
+        while (!file.eof()) {
+            file >> p.x;
+            file >> p.y;
+            m_differentials.push_back(p);
+        }
+        file.close();
+        std::cout<<"Total of "<<m_differentials.size()<<" differentials"<<std::endl;
+    }
+    else
+    {
+        std::cerr<<"Could not open file :("<<std::endl;
+    }
+}
+//----------------------------------------------------------------------------------------------------------------------
+void FourierSolver::analysePoints()
+{
+
+    // Calculate our pair-wise differencials within our range selection
+    float l;
+    m_sampleDiff.clear();
+    float2 p;
+    for(unsigned int i=0; i<m_differentials.size();i++)
+    {
+        p = m_differentials[i];
         l = p.length();
         if(l>m_rangeSelection) continue;
         if(fabs(p.x)>m_axisRange||fabs(p.y)>m_axisRange) continue;
@@ -86,10 +121,6 @@ void FourierSolver::import2DFromFile(QString _dir)
         p*=float2(m_width-1,m_height-1);
         m_pdf[(int)floor(p.x)][(int)floor(p.y)]+=1.f;
     }
-}
-//----------------------------------------------------------------------------------------------------------------------
-void FourierSolver::analysePoints()
-{
 
 #ifdef USE_PTHREADS
     std::vector<pthread_t> pid;
