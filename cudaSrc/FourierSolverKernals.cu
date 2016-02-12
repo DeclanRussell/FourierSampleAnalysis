@@ -7,6 +7,8 @@
 #include "FourierSolverKernals.h"
 #include <helper_math.h>  //< some math operations with cuda types
 #include <iostream>
+#include <thrust/device_ptr.h>
+#include <thrust/reduce.h>
 #define M_E        2.71828182845904523536f
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -72,6 +74,21 @@ __global__ void analyseKernal(int _numDiffs, int _psSize, int _res, float _SDSqr
 
 //        Put our result into our buffer
         _buffs.ps[idx] = ps;
+    }
+}
+//----------------------------------------------------------------------------------------------------------------------
+__global__ void analyseV2Kernal(int _numDiffs, float2 _freqVec, int _res, float _SDSqrd, FourierBuffers _buffs)
+{
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if(idx<_numDiffs)
+    {
+        float2 diff, diffNorm;
+        diff = diffNorm = _buffs.diffs[idx];
+        diffNorm+=1.f;
+        diffNorm/=2.f;
+        diffNorm*=_res;
+        int pdfIdx = (int)floor(diffNorm.x)+(int)floor(diffNorm.y)*_res;
+        _buffs.weightedDiff[idx] = gausian(_freqVec,diff,_SDSqrd)*_buffs.pdf[pdfIdx];
     }
 }
 //----------------------------------------------------------------------------------------------------------------------
@@ -146,4 +163,29 @@ void analyse(cudaStream_t _stream, int _numThreads, int _numDiffs, int _res, flo
     }
 
 }
+//----------------------------------------------------------------------------------------------------------------------
+float analyseV2(cudaStream_t _stream, int _numThreads, int _numDiffs, float2 _freqVec, int _res, float _SDSqrd, FourierBuffers _buffs)
+{
+    int blocks = 1;
+    int threads = _numDiffs;
+    if(_numDiffs>_numThreads)
+    {
+        //calculate how many blocks we want
+        blocks = ceil(_numDiffs/_numThreads)+1;
+        threads = _numThreads;
+    }
+
+    //Perform our analysis
+    analyseV2Kernal<<<blocks,threads,0,_stream>>>(_numDiffs,_freqVec, _res,_SDSqrd, _buffs);
+
+    //make sure all our threads are done
+    cudaThreadSynchronize();
+
+    // Now lets turn our raw pointer into a thrust iterator
+    thrust::device_ptr<float> t_wDPtr = thrust::device_pointer_cast(_buffs.weightedDiff);
+
+    // Return our sum
+    return thrust::reduce(t_wDPtr, t_wDPtr+_numDiffs, 0.f, thrust::plus<float>());
+}
+
 //----------------------------------------------------------------------------------------------------------------------

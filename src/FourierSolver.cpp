@@ -6,7 +6,7 @@
 #include <QColor>
 
 //----------------------------------------------------------------------------------------------------------------------
-FourierSolver::FourierSolver() : m_resolution(110),m_rangeSelection(0.1f)
+FourierSolver::FourierSolver() : m_resolution(200),m_rangeSelection(0.1f)
 {
     setStandardDeviation(0.02f);
     m_psImage = QImage(m_resolution,m_resolution,QImage::Format_RGB32);
@@ -37,6 +37,7 @@ FourierSolver::FourierSolver() : m_resolution(110),m_rangeSelection(0.1f)
     m_deviceBuffers.diffs = 0;
     m_deviceBuffers.pdf = 0;
     m_deviceBuffers.ps = 0;
+    m_deviceBuffers.weightedDiff = 0;
 
 }
 //----------------------------------------------------------------------------------------------------------------------
@@ -48,9 +49,11 @@ FourierSolver::~FourierSolver()
     if(m_deviceBuffers.diffs) checkCudaErrors(cudaFree(m_deviceBuffers.diffs));
     if(m_deviceBuffers.pdf) checkCudaErrors(cudaFree(m_deviceBuffers.pdf));
     if(m_deviceBuffers.ps) checkCudaErrors(cudaFree(m_deviceBuffers.ps));
+    if(m_deviceBuffers.weightedDiff) checkCudaErrors(cudaFree(m_deviceBuffers.weightedDiff));
     m_deviceBuffers.diffs = 0;
     m_deviceBuffers.pdf = 0;
     m_deviceBuffers.ps = 0;
+    m_deviceBuffers.weightedDiff = 0;
 }
 //----------------------------------------------------------------------------------------------------------------------
 void FourierSolver::import2DFromFile(QString _dir)
@@ -189,12 +192,15 @@ void FourierSolver::analysePoints()
     if(m_deviceBuffers.diffs) checkCudaErrors(cudaFree(m_deviceBuffers.diffs));
     if(m_deviceBuffers.pdf) checkCudaErrors(cudaFree(m_deviceBuffers.pdf));
     if(m_deviceBuffers.ps) checkCudaErrors(cudaFree(m_deviceBuffers.ps));
+    if(m_deviceBuffers.weightedDiff) checkCudaErrors(cudaFree(m_deviceBuffers.weightedDiff));
     m_deviceBuffers.diffs = 0;
     m_deviceBuffers.pdf = 0;
     m_deviceBuffers.ps = 0;
+    m_deviceBuffers.weightedDiff = 0;
     // Send the data to the GPU
     checkCudaErrors(cudaMalloc(&m_deviceBuffers.diffs,m_differentials.size()*sizeof(float2)));
     checkCudaErrors(cudaMemcpy(m_deviceBuffers.diffs,&m_differentials[0],sizeof(float2)*m_differentials.size(),cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMalloc(&m_deviceBuffers.weightedDiff,m_differentials.size()*sizeof(float)));
     // Allocate the space for our histogram and power spectrum
     checkCudaErrors(cudaMalloc(&m_deviceBuffers.pdf,m_resolution*m_resolution*sizeof(float)));
     checkCudaErrors(cudaMalloc(&m_deviceBuffers.ps,m_resolution*m_resolution*sizeof(float)));
@@ -203,7 +209,7 @@ void FourierSolver::analysePoints()
     fillPDF(m_stream,m_maxNumThreads,(int)m_differentials.size(),m_resolution,m_deviceBuffers);
 
     // Perfrom our analysis
-    analyse(m_stream,m_maxNumThreads,(int)m_differentials.size(),m_resolution,m_stanDevSqrd,m_deviceBuffers);
+    //analyse(m_stream,m_maxNumThreads,(int)m_differentials.size(),m_resolution,m_stanDevSqrd,m_deviceBuffers);
 
 
 //    // Calculate our pair-wise differencials within our range selection
@@ -323,11 +329,18 @@ void FourierSolver::analysePoints()
     checkCudaErrors(cudaMemcpy(&m_pdf[0],m_deviceBuffers.ps,sizeof(float)*m_resolution*m_resolution,cudaMemcpyDeviceToHost));
 
     float ps;
+    float2 freqVec;
     for(int x=0;x<m_psImage.width();x++)
     for(int y=0;y<m_psImage.height();y++)
     {
-        ps = m_pdf[x+y*m_resolution]*255;
+        //ps = m_pdf[x+y*m_resolution]*255;
+        freqVec = make_float2(x,y);
+        freqVec/= m_resolution;
+        freqVec*=2.f;
+        freqVec-=1.f;
+        ps = analyseV2(m_stream,m_maxNumThreads,(int)m_differentials.size(),freqVec,m_resolution,m_stanDevSqrd,m_deviceBuffers);
         //if(ps>0) std::cout<<"ps "<<ps<<std::endl;
+        ps*=255;
         if(ps>255)
         {
             ps=255;

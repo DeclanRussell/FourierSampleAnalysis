@@ -19,6 +19,10 @@ struct FourierBuffers
     //----------------------------------------------------------------------------------------------------------------------
     float2 *diffs;
     //----------------------------------------------------------------------------------------------------------------------
+    /// @brief buffer to store weighted differencials
+    //----------------------------------------------------------------------------------------------------------------------
+    float *weightedDiff;
+    //----------------------------------------------------------------------------------------------------------------------
 };
 //----------------------------------------------------------------------------------------------------------------------
 /// @brief function to fill our histogram
@@ -39,6 +43,17 @@ void fillPDF(cudaStream_t _stream, int _numThreads, int _numDiffs, int _res, Fou
 /// @param _buffs - our buffers of data for fourier analysis
 //----------------------------------------------------------------------------------------------------------------------
 void analyse(cudaStream_t _stream, int _numThreads, int _numDiffs, int _res, float _SDSqrd, FourierBuffers _buffs);
+//----------------------------------------------------------------------------------------------------------------------
+/// @brief Our second approach at implementing this analysis which works on a pixel by pixel basis
+/// @param _stream - our cuda stream to run our kernal on
+/// @param _numThreads - number of threads we have per block
+/// @param _numDiffs - total number of differencials
+/// @param _freqVec - Our frequency vector of this cell
+/// @param _res - resolution of our histogram
+/// @param _SDSqrd - standard deviation squared. Used in our guassian function.
+/// @param _buffs - our buffers of data for fourier analysis
+//----------------------------------------------------------------------------------------------------------------------
+float analyseV2(cudaStream_t _stream, int _numThreads, int _numDiffs, float2 _freqVec, int _res, float _SDSqrd, FourierBuffers _buffs);
 //----------------------------------------------------------------------------------------------------------------------
 
 #endif // FOURIERSOLVERKERNALS_H
