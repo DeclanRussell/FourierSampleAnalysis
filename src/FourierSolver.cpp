@@ -1,46 +1,56 @@
 #include "FourierSolver.h"
-#include <fstream>
 #define _USE_MATH_DEFINES
-#define MAX_THREADS 1000
 #include <math.h>
+#include <fstream>
 #include <iostream>
 #include <QColor>
 
 //----------------------------------------------------------------------------------------------------------------------
-FourierSolver::FourierSolver() : m_width(200),m_height(200),m_rangeSelection(2.f),m_axisRange(5.f)
+FourierSolver::FourierSolver() : m_resolution(110),m_rangeSelection(0.1f)
 {
-    setStandardDeviation(0.2f);
-    m_psImage = QImage(m_width,m_height,QImage::Format_RGB32);
-    m_pdf = new float*[m_width];
-    for(int i=0;i<m_width;i++)
-    {
-        m_pdf[i] = new float[m_height];
-        for(int j=0;j<m_height;j++)
-        {
-            m_pdf[i][j]=0.f;
-        }
+    setStandardDeviation(0.02f);
+    m_psImage = QImage(m_resolution,m_resolution,QImage::Format_RGB32);
+    m_pdf.resize(m_resolution*m_resolution);
+
+    //Lets test some cuda stuff
+    int count;
+    if (cudaGetDeviceCount(&count))
+        return;
+    std::cout << "Found" << count << "CUDA device(s)" << std::endl;
+    if(count == 0){
+        std::cerr<<"Install an Nvidia chip!"<<std::endl;
+        return;
     }
-    m_ps = new float*[m_width];
-    for(int i=0;i<m_width;i++)
+    for (int i=0; i < count; i++)
     {
-        m_ps[i] = new float[m_height];
+        cudaDeviceProp prop;
+        cudaGetDeviceProperties(&prop, i);
+        std::cout<<prop.name<<", Compute capability:"<<prop.major<<"."<<prop.minor<<std::endl;;
+        std::cout<<"  Global mem: "<<prop.totalGlobalMem/ 1024 / 1024<<"M, Shared mem per block: "<<prop.sharedMemPerBlock / 1024<<"k, Registers per block: "<<prop.regsPerBlock<<std::endl;
+        std::cout<<"  Warp size: "<<prop.warpSize<<" threads, Max threads per block: "<<prop.maxThreadsPerBlock<<", Multiprocessor count: "<<prop.multiProcessorCount<<" MaxBlocks: "<<prop.maxGridSize[0]<<std::endl;
+        m_maxNumThreads = prop.maxThreadsPerBlock;
     }
+
+    // Create our cuda stream
+    checkCudaErrors(cudaStreamCreate(&m_stream));
+
+    m_deviceBuffers.diffs = 0;
+    m_deviceBuffers.pdf = 0;
+    m_deviceBuffers.ps = 0;
+
 }
 //----------------------------------------------------------------------------------------------------------------------
 FourierSolver::~FourierSolver()
-{
-    // Delete our histogram
-    for(int i=0;i<m_width;i++)
-    {
-        delete [] m_pdf[i];
-    }
-    delete [] m_pdf;
-    // Delete our power spectrum information
-    for(int i=0;i<m_width;i++)
-    {
-        delete [] m_ps[i];
-    }
-    delete [] m_ps;
+{   
+    // Delete our CUDA streams as well
+    checkCudaErrors(cudaStreamDestroy(m_stream));
+    // Delete our CUDA buffers fi they have anything in them
+    if(m_deviceBuffers.diffs) checkCudaErrors(cudaFree(m_deviceBuffers.diffs));
+    if(m_deviceBuffers.pdf) checkCudaErrors(cudaFree(m_deviceBuffers.pdf));
+    if(m_deviceBuffers.ps) checkCudaErrors(cudaFree(m_deviceBuffers.ps));
+    m_deviceBuffers.diffs = 0;
+    m_deviceBuffers.pdf = 0;
+    m_deviceBuffers.ps = 0;
 }
 //----------------------------------------------------------------------------------------------------------------------
 void FourierSolver::import2DFromFile(QString _dir)
@@ -51,12 +61,26 @@ void FourierSolver::import2DFromFile(QString _dir)
     // Read our 2D points from our file into our array
     std::ifstream file(_dir.toStdString());
     float2 p;
+    float2 min,max;
+    bool mmSet = false;
     if(file.is_open())
     {
         while (!file.eof()) {
             file >> p.x;
             file >> p.y;
             m_2DPoints.push_back(p);
+            if(mmSet)
+            {
+                if(p.x<min.x) min.x = p.x;
+                if(p.y<min.y) min.y = p.y;
+                if(p.x>max.x) max.x = p.x;
+                if(p.y>max.y) max.y = p.y;
+            }
+            else
+            {
+                min = max = p;
+                mmSet = true;
+            }
         }
         file.close();
         std::cout<<"Total of "<<m_2DPoints.size()<<" points"<<std::endl;
@@ -65,15 +89,50 @@ void FourierSolver::import2DFromFile(QString _dir)
     {
         std::cerr<<"Could not open file :("<<std::endl;
     }
+    // Move all our points to between 0 and 1 for ease of use
+    for(unsigned int i=0; i<m_2DPoints.size(); i++)
+    {
+        m_2DPoints[i]-=min;
+        m_2DPoints[i]/=max - min;
+    }
+
     // Calculate our pair-wise differencials. This is a generalisation of the fourier transform to improve performance.
     // We will also create our probability density histogram here
+
+    mmSet = false;
     for(unsigned int i=0; i<m_2DPoints.size();i++)
     for(unsigned int j=0;j<m_2DPoints.size();j++)
     {
         if(i==j) continue;
         p = m_2DPoints[i]-m_2DPoints[j];
+        if(fabs(p.x)>m_rangeSelection||fabs(p.y)>m_rangeSelection) continue;
         m_differentials.push_back(p);
+        if(mmSet)
+        {
+            if(p.x<min.x) min.x = p.x;
+            if(p.y<min.y) min.y = p.y;
+            if(p.x>max.x) max.x = p.x;
+            if(p.y>max.y) max.y = p.y;
+        }
+        else
+        {
+            min = max = p;
+            mmSet = true;
+        }
+
     }
+
+    std::cout<<"num diffs "<<m_differentials.size()<<std::endl;
+
+    // Move all our differentials to between -1 and 1 for ease of use
+    for(unsigned int i=0; i<m_differentials.size(); i++)
+    {
+        m_differentials[i]-=min;
+        m_differentials[i]/=max - min;
+        m_differentials[i]*=2.0f;
+        m_differentials[i]-=1.0f;
+    }
+
 }
 //----------------------------------------------------------------------------------------------------------------------
 void FourierSolver::importDifferentialsFromFile(QString _dir)
@@ -82,12 +141,27 @@ void FourierSolver::importDifferentialsFromFile(QString _dir)
     // Read our 2D points from our file into our array
     std::ifstream file(_dir.toStdString());
     float2 p;
+    float2 min,max;
+    bool mmSet = false;
     if(file.is_open())
     {
         while (!file.eof()) {
             file >> p.x;
             file >> p.y;
+            if(fabs(p.x)>m_rangeSelection||fabs(p.y)>m_rangeSelection) continue;
             m_differentials.push_back(p);
+            if(mmSet)
+            {
+                if(p.x<min.x) min.x = p.x;
+                if(p.y<min.y) min.y = p.y;
+                if(p.x>max.x) max.x = p.x;
+                if(p.y>max.y) max.y = p.y;
+            }
+            else
+            {
+                min = max = p;
+                mmSet = true;
+            }
         }
         file.close();
         std::cout<<"Total of "<<m_differentials.size()<<" differentials"<<std::endl;
@@ -96,31 +170,63 @@ void FourierSolver::importDifferentialsFromFile(QString _dir)
     {
         std::cerr<<"Could not open file :("<<std::endl;
     }
+
+    // Move all our differentials to between -1 and 1 for ease of use
+    for(unsigned int i=0; i<m_differentials.size(); i++)
+    {
+        m_differentials[i]-=min;
+        m_differentials[i]/=max - min;
+        m_differentials[i]*=2.0f;
+        m_differentials[i]-=1.0f;
+    }
 }
 //----------------------------------------------------------------------------------------------------------------------
 void FourierSolver::analysePoints()
 {
 
-    // Calculate our pair-wise differencials within our range selection
-    float l;
-    m_sampleDiff.clear();
-    float2 p;
-    for(unsigned int i=0; i<m_differentials.size();i++)
-    {
-        p = m_differentials[i];
-        l = p.length();
-        if(l>m_rangeSelection) continue;
-        if(fabs(p.x)>m_axisRange||fabs(p.y)>m_axisRange) continue;
+    // Load our differencials to our device
+    // Delete our CUDA buffers fi they have anything in them
+    if(m_deviceBuffers.diffs) checkCudaErrors(cudaFree(m_deviceBuffers.diffs));
+    if(m_deviceBuffers.pdf) checkCudaErrors(cudaFree(m_deviceBuffers.pdf));
+    if(m_deviceBuffers.ps) checkCudaErrors(cudaFree(m_deviceBuffers.ps));
+    m_deviceBuffers.diffs = 0;
+    m_deviceBuffers.pdf = 0;
+    m_deviceBuffers.ps = 0;
+    // Send the data to the GPU
+    checkCudaErrors(cudaMalloc(&m_deviceBuffers.diffs,m_differentials.size()*sizeof(float2)));
+    checkCudaErrors(cudaMemcpy(m_deviceBuffers.diffs,&m_differentials[0],sizeof(float2)*m_differentials.size(),cudaMemcpyHostToDevice));
+    // Allocate the space for our histogram and power spectrum
+    checkCudaErrors(cudaMalloc(&m_deviceBuffers.pdf,m_resolution*m_resolution*sizeof(float)));
+    checkCudaErrors(cudaMalloc(&m_deviceBuffers.ps,m_resolution*m_resolution*sizeof(float)));
 
-        // Add to our differentials list
-        m_sampleDiff.push_back(p);
+    // Fill our pdf
+    fillPDF(m_stream,m_maxNumThreads,(int)m_differentials.size(),m_resolution,m_deviceBuffers);
 
-        // Build up our pfd histogram
-        p+=m_axisRange;
-        p/=m_axisRange+m_axisRange;
-        p*=float2(m_width-1,m_height-1);
-        m_pdf[(int)floor(p.x)][(int)floor(p.y)]+=1.f;
-    }
+    // Perfrom our analysis
+    analyse(m_stream,m_maxNumThreads,(int)m_differentials.size(),m_resolution,m_stanDevSqrd,m_deviceBuffers);
+
+
+//    // Calculate our pair-wise differencials within our range selection
+//    float2 p;
+//    float prop = 1.f/(float)m_differentials.size();
+//    int idx;
+//    for(unsigned int i=0; i<m_differentials.size();i++)
+//    {
+//        p = m_differentials[i];
+
+//        // Build up our pfd histogram
+//        p+=1.0f;
+//        p/=2.0f;
+//        p*=m_resolution;
+//        idx = (int)floor(p.x)+(int)floor(p.y)*m_resolution;
+//        if(idx<m_pdf.size()){
+//            m_pdf[(int)floor(p.x)+(int)floor(p.y)*m_resolution]+=prop;
+//        }
+//        else
+//        {
+//            std::cout<<"idx "<<idx<<" d "<<m_differentials[i].x<<","<<m_differentials[i].y<<std::endl;
+//        }
+//    }
 
 #ifdef USE_PTHREADS
     std::vector<pthread_t> pid;
@@ -181,7 +287,7 @@ void FourierSolver::analysePoints()
         m_psImage.setPixel(x,y,QColor(ps,ps,ps).rgb());
     }
 
-#else
+//#else
     float ps;
     float2 freqVector;
     float max = 0;
@@ -213,7 +319,29 @@ void FourierSolver::analysePoints()
     }
 #endif
 
+    //Copy our data back to our host
+    checkCudaErrors(cudaMemcpy(&m_pdf[0],m_deviceBuffers.ps,sizeof(float)*m_resolution*m_resolution,cudaMemcpyDeviceToHost));
 
+    float ps;
+    for(int x=0;x<m_psImage.width();x++)
+    for(int y=0;y<m_psImage.height();y++)
+    {
+        ps = m_pdf[x+y*m_resolution]*255;
+        //if(ps>0) std::cout<<"ps "<<ps<<std::endl;
+        if(ps>255)
+        {
+            ps=255;
+        }
+        m_psImage.setPixel(x,y,QColor((int)ps,(int)ps,(int)ps).rgb());
+    }
+
+}
+//----------------------------------------------------------------------------------------------------------------------
+void FourierSolver::setResolution(int _r)
+{
+    m_resolution = _r;
+    m_psImage = QImage(m_resolution,m_resolution,QImage::Format_RGB32);
+    m_pdf.resize(m_resolution*m_resolution);
 }
 //----------------------------------------------------------------------------------------------------------------------
 #ifdef USE_PTHREADS
@@ -244,13 +372,5 @@ float FourierSolver::gausian(float2 _q, float2 _d)
     sq*=sq;
     float w = pow(M_E,-((sq.x+sq.y)/(2.f*m_stanDevSqrd)));
     return w;
-}
-//----------------------------------------------------------------------------------------------------------------------
-float FourierSolver::pdf(float2 _x)
-{
-    _x+=m_axisRange;
-    _x/=m_axisRange+m_axisRange;
-    _x*=float2(m_width-1,m_height-1);
-    return (m_pdf[(int)floor(_x.x)][(int)floor(_x.y)]/(float)m_sampleDiff.size());
 }
 //----------------------------------------------------------------------------------------------------------------------

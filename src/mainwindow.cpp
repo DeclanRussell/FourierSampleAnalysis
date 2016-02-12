@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QPixmap>
 #include <iostream>
+#include <iostream>
 
 //----------------------------------------------------------------------------------------------------------------------
 MainWindow::MainWindow(QWidget *parent) :
@@ -23,13 +24,10 @@ MainWindow::MainWindow(QWidget *parent) :
     m_psLbl = new QLabel(m_centralWgt);
     m_UI->addWidget(m_psLbl,0,0,1,2);
 
-    // Create a field for our axis range
-    m_UI->addWidget(new QLabel("Axis Range",m_centralWgt),1,0,1,1);
-    QDoubleSpinBox *axisRangeSpn = new QDoubleSpinBox(m_centralWgt);
-    axisRangeSpn->setValue(m_fourierSolver->getAxisRange());
-    axisRangeSpn->setDecimals(4);
-    connect(axisRangeSpn,SIGNAL(valueChanged(double)),this,SLOT(setAxisRange(double)));
-    m_UI->addWidget(axisRangeSpn,1,1,1,1);
+    // Create a button to import 2D points from a file
+    QPushButton *resizeImg = new QPushButton("Resize image to window",m_centralWgt);
+    m_UI->addWidget(resizeImg,1,0,1,2);
+    connect(resizeImg,SIGNAL(pressed()),this,SLOT(resizeImage()));
 
     // Create a field for our range selection
     m_UI->addWidget(new QLabel("Range Selection",m_centralWgt),2,0,1,1);
@@ -42,8 +40,9 @@ MainWindow::MainWindow(QWidget *parent) :
     // Create a field for our gaussian standar deviation
     m_UI->addWidget(new QLabel("Gaussian Standard Deviation",m_centralWgt),3,0,1,1);
     QDoubleSpinBox *sdSpn = new QDoubleSpinBox(m_centralWgt);
-    sdSpn->setValue(m_fourierSolver->getStandardDeviation());
+    sdSpn->setMaximum(INFINITY);
     sdSpn->setDecimals(4);
+    sdSpn->setValue(m_fourierSolver->getStandardDeviation());
     connect(sdSpn,SIGNAL(valueChanged(double)),this,SLOT(setSD(double)));
     m_UI->addWidget(sdSpn,3,1,1,1);
 
@@ -105,5 +104,11 @@ void MainWindow::saveImage()
     QString loc =  QFileDialog::getSaveFileName(this,"Save Power Spectrum Image");
     if(!loc.endsWith(".png",Qt::CaseInsensitive)) loc+=".png";
     m_fourierSolver->getPSImage().save(loc,"PNG");
+}
+//----------------------------------------------------------------------------------------------------------------------
+void MainWindow::resizeImage()
+{
+    QPixmap img = QPixmap::fromImage(m_fourierSolver->getPSImage());
+    m_psLbl->setPixmap(img.scaled(m_psLbl->width(),m_psLbl->height(),Qt::KeepAspectRatio));
 }
 //----------------------------------------------------------------------------------------------------------------------
